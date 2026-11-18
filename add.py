@@ -419,13 +419,7 @@ with st.sidebar:
 
     all_alerts.sort(key=lambda x: x[0])
 
-    filter_mode = st.radio(
-        "알림 표시 범위",
-        ["즉시 발송 대상만 보기 (핵심 긴급 + 변동)", "전체 감지 경보 보기"],
-        index=0
-    )
-
-    visible_alerts = [a for a in all_alerts if a[6]] if "즉시 발송" in filter_mode else all_alerts
+    visible_alerts = [a for a in all_alerts if a[6]]
     digest_cnt = sum(1 for a in all_alerts if not a[6])
 
     sc1, sc2 = st.columns(2)
@@ -437,27 +431,24 @@ with st.sidebar:
     if sc2.button("일일 요약 발송", use_container_width=True):
         st.info(f"주의·검토 {digest_cnt}건 일일 리포트 발송 완료")
 
-    st.caption(f"표시 중: **{len(visible_alerts)}건** (일일 요약 대기 {digest_cnt}건 제외)")
+    st.caption(f"즉시 확인할 알림 **{len(visible_alerts)}건**")
     st.divider()
+    if st.button("긴급·변동 SKU 권고 목록", use_container_width=True):
+        st.session_state.show_alert_orders = not st.session_state.get("show_alert_orders", False)
 
-    # 최대 5건만 카드로 렌더링해 스크롤 과부하 방지
-    max_show = 5
-    for idx, (lvl, sev, sid, sname, title, detail, push_now) in enumerate(visible_alerts[:max_show]):
-        cls_map = {0: "alert-red", 1: "alert-blue", 2: "alert-orange", 3: "alert-yellow"}
-        icon_map = {0: "🔴", 1: "🔵", 2: "🟠", 3: "🟡"}
-        badge_txt = "즉시푸시" if push_now else "일일요약"
-        st.markdown(f"""
-        <div class="alert-card {cls_map[lvl]}">
-            <strong>{icon_map[lvl]} [{sev}] {title}</strong> · <span style="font-size:0.78rem;">({badge_txt})</span><br>
-            <span style="font-weight:700;">{sid} ({sname})</span><br>
-            {detail}
-        </div>
-        """, unsafe_allow_html=True)
-        if st.button("추가 보기", key=f"alert_detail_{idx}_{sid}", use_container_width=True):
-            st.session_state.alert_detail_sku = sid
-
-    if len(visible_alerts) > max_show:
-        st.info(f"외 **{len(visible_alerts) - max_show}건**이 더 있습니다. 알림 표시 범위를 변경해 확인하세요.")
+    with st.container(height=380, border=True):
+        if not visible_alerts:
+            st.info("즉시 확인할 알림이 없습니다.")
+        for lvl, sev, sid, sname, title, detail, push_now in visible_alerts:
+            cls_map = {0: "alert-red", 1: "alert-blue", 2: "alert-orange", 3: "alert-yellow"}
+            icon_map = {0: "🔴", 1: "🔵", 2: "🟠", 3: "🟡"}
+            st.markdown(f"""
+            <div class="alert-card {cls_map[lvl]}">
+                <strong>{icon_map[lvl]} [{sev}] {title}</strong><br>
+                <span style="font-weight:700;">{sid} ({sname})</span><br>
+                {detail}
+            </div>
+            """, unsafe_allow_html=True)
 # ---------------------------------------------------------
 # 6. 메인 탭 구성
 # ---------------------------------------------------------
@@ -476,8 +467,22 @@ with tab1:
     order_c1.metric("권고 발주량", f"{active_res['recommend']:,}개")
     order_c2.metric("담당자 입력 발주량", f"{active_sku['planned']:,}개")
     order_c3.metric("권고 발주시점", order_day.strftime("%Y.%m.%d (오늘)") if order_day else "현재 발주 불필요")
-    st.caption("선택한 SKU 기준 · 입력값을 반영해 권고량을 다시 계산합니다. 담당자가 입력한 희망량은 권고량과 별도로 표시합니다. 발주시점은 재주문점 충족 시 기준일입니다.")
+    st.caption("선택한 SKU 기준 · 재고·입고·확정 주문을 반영해 권고량을 다시 계산합니다. 담당자 희망 발주량은 권고량 계산에 쓰지 않고 비교용으로 표시합니다. 발주시점은 재주문점 충족 시 기준일입니다.")
+    if (st.session_state.get("recalculation_note") or {}).get("sku") == active_sku["id"]:
+        st.info(st.session_state.recalculation_note["message"])
     st.warning("로트별 재고·소비기한과 예정 입고 데이터는 제공된 원장으로 확인되지 않았습니다. 현재 값은 시연용 가정이며, 실제 발주 전 담당자의 확인이 필요합니다.")
+    if st.session_state.get("show_alert_orders"):
+        alert_sku_ids = {a[2] for a in visible_alerts}
+        st.subheader("긴급·변동 SKU 발주 권고 결과")
+        alert_rows = [{
+            "SKU ID": r["sku"]["id"],
+            "품목명": r["sku"]["name"],
+            "권고 발주량": f"{r['recommend']:,}개",
+            "신규 발주 상한": f"{r['cap']:,}개",
+            "최초 품절 예상": "품절 없음" if r["first"] is None else fmt_md(r["first"]),
+            "항공 긴급 투입량": f"{r['airQty']:,}개",
+        } for r in results if r["sku"]["id"] in alert_sku_ids]
+        st.dataframe(pd.DataFrame(alert_rows), use_container_width=True, hide_index=True)
 
     st.divider()
 
@@ -485,16 +490,17 @@ with tab1:
     col_in_head, col_reset = st.columns([4, 1])
     with col_in_head:
         st.subheader(f"발주 조건 및 변동 시뮬레이션 입력 — [{active_sku['id']} {active_sku['name']}]")
-        st.caption("기준일(2026.11.16)로부터 며칠 뒤인지(D+일)를 입력하면 실제 달력 날짜가 옆에 자동으로 표시됩니다.")
+        st.caption("수량과 입고 예정일을 수정할 수 있습니다. D+일은 기준일(2026.11.16) 이후의 일수입니다.")
     with col_reset:
         if st.button("초기 예시값 복원", use_container_width=True):
             st.session_state.sku_data = get_initial_data()
             st.session_state.events = []
             st.session_state.sent_alerts = set()
             st.session_state.read_alerts = set()
-            st.session_state.alert_detail_sku = None
+            st.session_state.show_alert_orders = False
+            st.session_state.recalculation_note = None
             for key in list(st.session_state):
-                if key.startswith(("lqty_", "lexp_", "lend_", "iqty_", "iday_", "iend_")):
+                if key.startswith(("lqty_", "iqty_", "iday_", "iend_")):
                     del st.session_state[key]
             st.rerun()
 
@@ -506,11 +512,9 @@ with tab1:
             lc1, lc2, lc3, lc4 = st.columns([1.2, 1.2, 1.3, 1.3])
             lc1.markdown(f"**현재 재고 · {lot['id']}**<br><span style='font-size:0.8rem; color:#096351;'>창고 보유중</span>", unsafe_allow_html=True)
             l_qty = lc2.number_input(f"{lot['id']} 가용 수량 (개)", min_value=0, max_value=1000000, value=int(lot["qty"]), key=f"lqty_{active_sku['id']}_{idx}")
-            l_exp = lc3.number_input(f"{lot['id']} 소비기한 만료 (D+일)", min_value=0, max_value=730, value=int(lot.get("expiry", lot["deadline"])), key=f"lexp_{active_sku['id']}_{idx}")
-            lc3.markdown(f'<span class="date-preview">만료일: {fmt_md(l_exp)}</span>', unsafe_allow_html=True)
-            l_end = lc4.number_input(f"{lot['id']} 실제 판매 마감 (D+일)", min_value=0, max_value=730, value=int(lot["deadline"]), key=f"lend_{active_sku['id']}_{idx}")
-            lc4.markdown(f'<span class="date-preview">마감일: {fmt_md(l_end)}</span>', unsafe_allow_html=True)
-            lot_inputs.append((idx, l_qty, l_exp, l_end))
+            lc3.markdown(f"**소비기한 만료일**<br>{fmt_md(lot.get('expiry', lot['deadline']))} (D+{lot.get('expiry', lot['deadline'])})", unsafe_allow_html=True)
+            lc4.markdown(f"**실제 판매 마감일**<br>{fmt_md(lot['deadline'])} (D+{lot['deadline']})", unsafe_allow_html=True)
+            lot_inputs.append((idx, l_qty))
 
         inb_inputs = []
         for idx, inb in enumerate(active_sku["inbound"]):
@@ -536,11 +540,10 @@ with tab1:
 
         submitted = st.form_submit_button("입력값 반영 및 발주 권고 재계산", use_container_width=True, type="primary")
         if submitted:
+            previous_recommend = active_res["recommend"]
             active_sku["planned"] = int(in_planned)
-            for idx, l_qty, l_exp, l_end in lot_inputs:
+            for idx, l_qty in lot_inputs:
                 active_sku["lots"][idx]["qty"] = int(l_qty)
-                active_sku["lots"][idx]["expiry"] = int(l_exp)
-                active_sku["lots"][idx]["deadline"] = int(l_end)
 
             for idx, i_qty, i_day, i_end in inb_inputs:
                 old_day = active_sku["inbound"][idx]["day"]
@@ -572,12 +575,26 @@ with tab1:
                     "detail": f"{fmt_md(in_b2b_day)} 출고 · {int(in_b2b_qty):,}개 추가"
                 })
 
+            updated = evaluate_all([active_sku])[0][0]
+            if updated["recommend"] == previous_recommend:
+                if updated["cap"] == 0:
+                    reason = "소비기한 내 판매 가능한 신규 발주 상한이 0개입니다."
+                elif updated["recommend"] == updated["cap"]:
+                    reason = "소비기한 기준 신규 발주 상한이 권고량을 제한하고 있습니다."
+                elif updated["recommend"] == 0:
+                    reason = "재고가 재주문점보다 높아 현재 신규 발주가 필요하지 않습니다."
+                else:
+                    reason = "변경된 재고·입고 수량이 발주 판단 구간을 바꾸지 않았습니다."
+                msg = f"입력값은 반영됐지만 권고 발주량은 {updated['recommend']:,}개로 같습니다. {reason} 담당자 희망량만 바꾸면 권고량은 달라지지 않습니다."
+            else:
+                msg = f"권고 발주량이 {previous_recommend:,}개 → {updated['recommend']:,}개로 변경됐습니다."
+            st.session_state.recalculation_note = {"sku": active_sku["id"], "message": msg}
             st.rerun()
 
     st.divider()
 
     # SKU별 발주 권고 결과표
-    # 알림의 추가 보기에서 해당 SKU의 권고 결과를 펼친다.
+    # 즉시 확인 대상 SKU의 권고 결과를 한 번에 펼친다.
     def get_rank(x):
         if x["airQty"] > 0:
             return 0
@@ -604,13 +621,6 @@ with tab1:
             "항공 긴급 투입량": f"{r['airQty']:,}개"
         })
 
-    if st.session_state.get("alert_detail_sku"):
-        detail_sku = st.session_state.alert_detail_sku
-        st.subheader(f"알림 상세 · {detail_sku} 발주 권고 결과")
-        st.dataframe(pd.DataFrame([row for row in table_rows if row["SKU ID"] == detail_sku]), use_container_width=True, hide_index=True)
-        if st.button("결과표 닫기"):
-            st.session_state.alert_detail_sku = None
-            st.rerun()
     with st.expander("전체 SKU 발주 권고 결과표"):
         st.dataframe(pd.DataFrame(table_rows), use_container_width=True, hide_index=True)
 
