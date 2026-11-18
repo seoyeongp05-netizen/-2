@@ -9,7 +9,7 @@ import plotly.graph_objects as go
 # 1. 페이지 설정 및 SELLERNOTE 딥그린 테마 스타일
 # ---------------------------------------------------------
 st.set_page_config(
-    page_title="셀러노트2 | 발주 프로그램",
+    page_title="셀러노트 | 발주 프로그램",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -165,6 +165,7 @@ def load_real_sku_data():
             "name": f"품목 {sid}",
             "forecast": forecast,
             "ship": [prev_ship, curr_ship],
+            # 로트별 입고·소비기한 원장은 제공되지 않아 아래 값은 시연용 가정이다.
             "lots": [{"id": f"{sid}-L1", "qty": cur_stock, "expiry": shelf_life, "deadline": shelf_life}],
             "inbound": [{"mode": "해상", "day": 28, "qty": mean_w * 4, "expiry": shelf_life + 60, "deadline": shelf_life + 60}],
             "b2b": [],
@@ -452,16 +453,16 @@ with st.sidebar:
             {detail}
         </div>
         """, unsafe_allow_html=True)
+        if st.button("추가 보기", key=f"alert_detail_{idx}_{sid}", use_container_width=True):
+            st.session_state.alert_detail_sku = sid
 
     if len(visible_alerts) > max_show:
-        st.info(f"외 **{len(visible_alerts) - max_show}건**이 더 있습니다. 전체 내역은 우측 'SKU별 발주 권고 결과표'에서 확인하세요.")
+        st.info(f"외 **{len(visible_alerts) - max_show}건**이 더 있습니다. 알림 표시 범위를 변경해 확인하세요.")
 # ---------------------------------------------------------
 # 6. 메인 탭 구성
 # ---------------------------------------------------------
-tab1, tab2, tab3, tab4 = st.tabs([
+tab1, tab4 = st.tabs([
     "종합 대시보드",
-    "소비기한",
-    "운송 수단",
     "SKU별 발주 상태"
 ])
 
@@ -469,35 +470,14 @@ tab1, tab2, tab3, tab4 = st.tabs([
 # [탭 1] 종합 대시보드
 # =========================================================
 with tab1:
-    st.subheader("금주 발주 및 물류 핵심 지표 (KPI)")
-
-    urgent_air_cnt = sum(1 for r in results if r["airQty"] > 0)
-    expiry_risk_cnt = sum(1 for r in results if r["waste"] > 0)
-    total_sku_cnt = len(results)
-    normal_cnt = sum(1 for r in results if r["first"] is None and r["waste"] == 0 and r["sku"]["planned"] <= r["cap"])
-
-    sales_prev = sum(s["ship"][0] for s in st.session_state.sku_data)
-    sales_curr = sum(s["ship"][1] for s in st.session_state.sku_data)
-    sales_pct = ((sales_curr - sales_prev) / sales_prev * 100) if sales_prev else 0.0
-
-    air_prev = sum(s["costs"]["air"][0] for s in st.session_state.sku_data)
-    air_curr = sum(s["costs"]["air"][1] for s in st.session_state.sku_data)
-    sea_prev = sum(s["costs"]["sea"][0] for s in st.session_state.sku_data)
-    sea_curr = sum(s["costs"]["sea"][1] for s in st.session_state.sku_data)
-    cost_prev = air_prev + sea_prev
-    cost_curr = air_curr + sea_curr
-    cost_pct = ((cost_curr - cost_prev) / cost_prev * 100) if cost_prev else 0.0
-
-    # 첫째 줄: 1, 2, 3번째 박스 (3번째 박스를 '전체 관리 SKU 수'로 변경)
-    row1_c1, row1_c2, row1_c3 = st.columns(3)
-    row1_c1.metric("① 긴급 항공 검토 필요", f"{urgent_air_cnt} SKU", delta="해상 입고 전 품절 방어 필요", delta_color="inverse" if urgent_air_cnt > 0 else "off")
-    row1_c2.metric("② 소비기한 임박·폐기 위험", f"{expiry_risk_cnt} SKU", delta="보수적 판매(P20) 시 잔량 발생", delta_color="inverse" if expiry_risk_cnt > 0 else "off")
-    row1_c3.metric("③ 전체 관리 SKU 수", f"{total_sku_cnt} SKU", delta=f"위험 경보 없는 정상 품목 {normal_cnt}개", delta_color="off")
-
-    # 둘째 줄: 4, 5번째 박스
-    row2_c1, row2_c2 = st.columns(2)
-    row2_c1.metric("④ 금주 운송수단별 운송비", f"{cost_curr:,}원", delta=f"해상 {sea_curr:,}원 · 항공 {air_curr:,}원", delta_color="off")
-    row2_c2.metric("⑤ 판매수량 및 운송비 주간 증감률", f"판매량 {sales_pct:+.1f}%", delta=f"금주 출고 {sales_curr:,}개 · 운송비 {cost_pct:+.1f}%", delta_color="off")
+    st.subheader(f"발주 권고 · {active_sku['id']}")
+    order_day = BASE_DATE if active_res["recommend"] > 0 else None
+    order_c1, order_c2, order_c3 = st.columns(3)
+    order_c1.metric("권고 발주량", f"{active_res['recommend']:,}개")
+    order_c2.metric("담당자 입력 발주량", f"{active_sku['planned']:,}개")
+    order_c3.metric("권고 발주시점", order_day.strftime("%Y.%m.%d (오늘)") if order_day else "현재 발주 불필요")
+    st.caption("선택한 SKU 기준 · 입력값을 반영해 권고량을 다시 계산합니다. 담당자가 입력한 희망량은 권고량과 별도로 표시합니다. 발주시점은 재주문점 충족 시 기준일입니다.")
+    st.warning("로트별 재고·소비기한과 예정 입고 데이터는 제공된 원장으로 확인되지 않았습니다. 현재 값은 시연용 가정이며, 실제 발주 전 담당자의 확인이 필요합니다.")
 
     st.divider()
 
@@ -512,6 +492,10 @@ with tab1:
             st.session_state.events = []
             st.session_state.sent_alerts = set()
             st.session_state.read_alerts = set()
+            st.session_state.alert_detail_sku = None
+            for key in list(st.session_state):
+                if key.startswith(("lqty_", "lexp_", "lend_", "iqty_", "iday_", "iend_")):
+                    del st.session_state[key]
             st.rerun()
 
     with st.form("intuitive_order_form"):
@@ -593,7 +577,7 @@ with tab1:
     st.divider()
 
     # SKU별 발주 권고 결과표
-    st.subheader("SKU별 발주 권고 결과표 (긴급 순위순)")
+    # 알림의 추가 보기에서 해당 SKU의 권고 결과를 펼친다.
     def get_rank(x):
         if x["airQty"] > 0:
             return 0
@@ -620,206 +604,18 @@ with tab1:
             "항공 긴급 투입량": f"{r['airQty']:,}개"
         })
 
-    st.dataframe(pd.DataFrame(table_rows), use_container_width=True, hide_index=True)
+    if st.session_state.get("alert_detail_sku"):
+        detail_sku = st.session_state.alert_detail_sku
+        st.subheader(f"알림 상세 · {detail_sku} 발주 권고 결과")
+        st.dataframe(pd.DataFrame([row for row in table_rows if row["SKU ID"] == detail_sku]), use_container_width=True, hide_index=True)
+        if st.button("결과표 닫기"):
+            st.session_state.alert_detail_sku = None
+            st.rerun()
+    with st.expander("전체 SKU 발주 권고 결과표"):
+        st.dataframe(pd.DataFrame(table_rows), use_container_width=True, hide_index=True)
 
-# =========================================================
-# [탭 2] 소비기한 (문제 2) — 상·하한 음영 밴드 + 주차별 직관 차트
-# =========================================================
-with tab2:
-    st.subheader(f"로트별 소비기한(FEFO) 소진 및 신규 발주 상한 — [{active_sku['id']} {active_sku['name']}]")
-    t = active_sku["terms"]
 
-    e1, e2, e3 = st.columns(3)
-    e1.metric("현재 로트 예상 폐기 잔량 (P20)", f"{active_res['waste']:,}개", delta="판매 둔화 시 만료 예상", delta_color="inverse" if active_res["waste"] > 0 else "off")
-    e2.metric("신규 해상 발주 최대 상한 (P95)", f"{active_res['cap']:,}개", delta=f"신규 입고 {fmt_md(t['sea'])} ~ 마감 {fmt_md(t['sea']+t['window'])}", delta_color="off")
-    e3.metric("담당자 희망 발주량 검증", f"{active_sku['planned']:,}개", delta="상한 초과! 조정 필요" if active_sku["planned"] > active_res["cap"] else "상한 이내 정상", delta_color="inverse" if active_sku["planned"] > active_res["cap"] else "normal")
-
-    lot_df = pd.DataFrame([
-        {
-            "로트 ID": l["id"],
-            "가용 재고": f"{int(l['qty']):,}개",
-            "P20 소진 기간": "미소진" if l["first"] is None else f"{fmt_md(l['first'])} ~ {fmt_md(l['last'])}",
-            "판매 마감일": fmt_md(l["deadline"]),
-            "판매 마감 시 만료 잔량": f"{int(np.ceil(l['lost'] - 1e-7)):,}개"
-        }
-        for l in active_res["wasteLots"]
-    ])
-    st.dataframe(lot_df, use_container_width=True, hide_index=True)
-
-    # 직관적 비교: 기간별 누적 판매 가능량(P20·평균) vs 현재재고·예정입고·희망발주
-    end_d = max(7, t["sea"] + t["window"])
-    sample_days = list(range(0, end_d + 1, 7))
-    if sample_days[-1] != end_d:
-        sample_days.append(end_d)
-
-    dates_x = [BASE_DATE + datetime.timedelta(days=d) for d in sample_days]
-    tick_labels = [f"{d//7}주 후<br>({fmt_md(d)})" if d > 0 else f"기준일<br>({fmt_md(0)})" for d in sample_days]
-
-    p20_y = [round(active_res["p20"]["lines"][d][0], 1) for d in sample_days]
-    mean_y = [round(active_res["mean"]["lines"][d][0], 1) for d in sample_days]
-
-    # 시간 흐름에 따른 단순 누적 입고량 (폐기 차감 없이 총 투입 물량만 표시해 직관성 확보)
-    cur_total = sum(l["qty"] for l in active_sku["lots"])
-    planned_qty = int(active_sku["planned"])
-
-    base_cum_in = []
-    plan_cum_in = []
-    for d in sample_days:
-        inb_sum = sum(l["qty"] for l in active_sku["inbound"] if l["day"] <= d)
-        base_cum_in.append(cur_total + inb_sum)
-        plan_cum_in.append(cur_total + inb_sum + (planned_qty if d >= t["sea"] else 0))
-
-    fig_exp = go.Figure()
-
-    # 1) 기존 재고 + 예정 입고 (회색 계단선)
-    fig_exp.add_trace(go.Scatter(
-        x=dates_x, y=base_cum_in, mode="lines",
-        line=dict(color="#64748B", width=2, dash="dash", shape="hv"),
-        name="기존 공급량 (현재재고 + 예정입고)"
-    ))
-
-    # 2) 희망 발주량 추가 시 총 공급량 (주황색 굵은 계단선)
-    fig_exp.add_trace(go.Scatter(
-        x=dates_x, y=plan_cum_in, mode="lines+markers",
-        line=dict(color="#EA580C", width=3, shape="hv"),
-        marker=dict(size=6, color="#EA580C"),
-        name=f"희망 발주({planned_qty:,}개) 포함 총 공급량"
-    ))
-
-    # 3) 평균 누적 판매 예측 (진한 초록선)
-    fig_exp.add_trace(go.Scatter(
-        x=dates_x, y=mean_y, mode="lines",
-        line=dict(color="#096351", width=3),
-        name="평균 누적 판매량"
-    ))
-
-    # 4) 보수적(P20) 누적 판매 예측 (연한 초록 점선)
-    fig_exp.add_trace(go.Scatter(
-        x=dates_x, y=p20_y, mode="lines",
-        line=dict(color="#10B981", width=2, dash="dot"),
-        name="보수적(P20) 누적 판매량"
-    ))
-
-    # 주요 일정 수직선
-    sea_dt = BASE_DATE + datetime.timedelta(days=t["sea"])
-    end_dt = BASE_DATE + datetime.timedelta(days=t["sea"] + t["window"])
-    fig_exp.add_vline(x=sea_dt, line_dash="dot", line_color="#2563EB", line_width=2)
-    fig_exp.add_annotation(x=sea_dt, y=1.06, yref="paper", text=f"신규 해상 입고 ({fmt_md(t['sea'])})", showarrow=False, font=dict(color="#2563EB", size=12))
-
-    fig_exp.add_vline(x=end_dt, line_dash="dash", line_color="#D93025", line_width=2)
-    fig_exp.add_annotation(x=end_dt, y=1.06, yref="paper", text=f"신규 발주 판매 마감 ({fmt_md(t['sea']+t['window'])})", showarrow=False, font=dict(color="#D93025", size=12))
-
-    fig_exp.update_layout(
-        title=dict(text="총 공급량(희망 발주 포함) vs 누적 판매량 비교", y=0.96),
-        xaxis=dict(tickmode="array", tickvals=dates_x[::2], ticktext=tick_labels[::2], showgrid=False),
-        yaxis=dict(title="누적 수량 (개)", gridcolor="#E6ECE9", zeroline=True, zerolinecolor="#D9E5DF"),
-        plot_bgcolor="white",
-        height=430,
-        margin=dict(t=105, b=40, l=50, r=30),
-        legend=dict(orientation="h", yanchor="bottom", y=1.13, xanchor="left", x=0)
-    )
-    st.plotly_chart(fig_exp, use_container_width=True)
-    st.caption("주황색 선(희망 발주 포함 총 공급량)이 초록색 선(누적 판매량)보다 위에 있을수록 판매 마감일까지 다 팔리지 않고 남는 폐기 위험 물량이 커집니다.")
-# =========================================================
-# [탭 3] 운송 수단 (문제 3) — 상·하한 음영 밴드 + 가용 공급 계단선 비교
-# =========================================================
-with tab3:
-    st.subheader(f"항공 및 해상 입고 전 품절 위험 분석 — [{active_sku['id']} {active_sku['name']}]")
-
-    tr1, tr2, tr3 = st.columns(3)
-    tr1.metric("항공 검토 입고일 / 해상 입고일", f"{fmt_md(active_res['air'])} / {fmt_md(active_res['seaDay'])}", delta="리드타임 비교 기준", delta_color="off")
-    tr2.metric("최초 품절 예상 시점 (P95)", "해상 입고 전 없음" if active_res["first"] is None else f"{fmt_md(active_res['first'])} ({active_res['first']//7 + 1}주차)", delta="안전 상한 돌파 시점", delta_color="inverse" if active_res["first"] is not None else "normal")
-    tr3.metric("긴급 항공 추가 투입 권고량", f"{active_res['airQty']:,}개", delta="해상 도착 전 품절 방어분", delta_color="inverse" if active_res["airQty"] > 0 else "off")
-
-    end_tr = max(7, active_res["air"], active_res["seaDay"])
-    tr_days = list(range(0, end_tr + 1))
-    tr_dates = [BASE_DATE + datetime.timedelta(days=d) for d in tr_days]
-
-    # x축 눈금은 1주(7일) 간격으로 깔끔하게 표시
-    tick_days_tr = list(range(0, end_tr + 1, 7))
-    if tick_days_tr[-1] != end_tr:
-        tick_days_tr.append(end_tr)
-    tick_dates_tr = [BASE_DATE + datetime.timedelta(days=d) for d in tick_days_tr]
-    tick_labels_tr = [f"{d//7}주 후<br>({fmt_md(d)})" if d > 0 else f"기준일<br>({fmt_md(0)})" for d in tick_days_tr]
-
-   # 해상 입고일(seaDay)까지의 리드타임 구간만 집중 표시하여 상단 카드와 100% 일치시킴
-    end_tr = max(7, active_res["air"], active_res["seaDay"])
-    tr_days = list(range(0, end_tr + 1))
-    tr_dates = [BASE_DATE + datetime.timedelta(days=d) for d in tr_days]
-
-    tick_days_tr = list(range(0, end_tr + 1, 7))
-    if tick_days_tr[-1] != end_tr:
-        tick_days_tr.append(end_tr)
-    tick_dates_tr = [BASE_DATE + datetime.timedelta(days=d) for d in tick_days_tr]
-    tick_labels_tr = [f"{d//7}주 후<br>({fmt_md(d)})" if d > 0 else f"기준일<br>({fmt_md(0)})" for d in tick_days_tr]
-
-    mean_tr = [round(active_res["mean"]["lines"][d][0], 1) for d in tr_days]
-    p95_dem = [round(active_res["p95"]["lines"][d][0], 1) for d in tr_days]
-    p95_sup = [round(active_res["p95"]["lines"][d][1], 1) for d in tr_days]
-
-    fig_tr = go.Figure()
-
-    # 1) 누적 가용 공급 (파란색 굵은 계단선)
-    fig_tr.add_trace(go.Scatter(
-        x=tr_dates, y=p95_sup, mode="lines",
-        line=dict(color="#2563EB", width=3.5, shape="hv"),
-        name="누적 가용 공급 (현재재고 + 예정입고)"
-    ))
-
-    # 2) 수요 상한 (P95 · 스파이크 기준)
-    fig_tr.add_trace(go.Scatter(
-        x=tr_dates, y=p95_dem, mode="lines",
-        line=dict(color="#D97706", width=2.5, dash="dot"),
-        name="누적 수요 상한 (P95 · 최대 예상)"
-    ))
-
-    # 3) 평균 누적 수요 (초록 실선)
-    fig_tr.add_trace(go.Scatter(
-        x=tr_dates, y=mean_tr, mode="lines",
-        line=dict(color="#096351", width=3),
-        name="누적 수요 평균"
-    ))
-
-    # 4) 긴급 항공 투입 권고량이 있을 경우, 항공 투입 후 보강된 공급선 표시
-    if active_res["airQty"] > 0:
-        air_boost_sup = [
-            s + (active_res["airQty"] if d >= active_res["air"] else 0)
-            for d, s in zip(tr_days, p95_sup)
-        ]
-        fig_tr.add_trace(go.Scatter(
-            x=tr_dates, y=air_boost_sup, mode="lines",
-            line=dict(color="#DC2626", width=2.5, dash="dash", shape="hv"),
-            name=f"긴급 항공({active_res['airQty']:,}개) 투입 시 공급"
-        ))
-
-    air_dt = BASE_DATE + datetime.timedelta(days=active_res["air"])
-    sea_tr_dt = BASE_DATE + datetime.timedelta(days=active_res["seaDay"])
-
-    fig_tr.add_vline(x=air_dt, line_dash="dot", line_color="#0284C7", line_width=2)
-    fig_tr.add_annotation(x=air_dt, y=1.06, yref="paper", text=f"항공 입고 가능일 ({fmt_md(active_res['air'])})", showarrow=False, font=dict(color="#0284C7", size=12))
-
-    fig_tr.add_vline(x=sea_tr_dt, line_dash="dash", line_color="#7C3AED", line_width=2)
-    fig_tr.add_annotation(x=sea_tr_dt, y=1.06, yref="paper", text=f"기존 해상 입고일 ({fmt_md(active_res['seaDay'])})", showarrow=False, font=dict(color="#7C3AED", size=12))
-
-    if active_res["first"] is not None:
-        first_dt = BASE_DATE + datetime.timedelta(days=active_res["first"])
-        fig_tr.add_vline(x=first_dt, line_dash="solid", line_color="#D93025", line_width=2.5)
-        fig_tr.add_annotation(x=first_dt, y=0.90, yref="paper", text=f"최초 품절 ({fmt_md(active_res['first'])})", showarrow=False, bgcolor="#FCE5E4", font=dict(color="#D93025", size=12))
-
-    fig_tr.update_layout(
-        title=dict(text="기존 해상 입고일 전 누적 공급 vs 누적 수요 비교", y=0.96),
-        xaxis=dict(tickmode="array", tickvals=tick_dates_tr, ticktext=tick_labels_tr, showgrid=False),
-        yaxis=dict(title="누적 수량 (개)", gridcolor="#E6ECE9", zeroline=True, zerolinecolor="#D9E5DF"),
-        plot_bgcolor="white",
-        height=430,
-        margin=dict(t=105, b=40, l=50, r=30),
-        legend=dict(orientation="h", yanchor="bottom", y=1.13, xanchor="left", x=0)
-    )
-    st.plotly_chart(fig_tr, use_container_width=True)
-    st.caption("파란색 계단선(가용 공급)이 주황색 점선(수요 상한 P95) 위에 유지되면 해상 입고 전 품절이 없으며, 아래로 내려가면 빨간 수직선 시점에 품절이 발생합니다.")
-# =========================================================
-# [탭 4] SKU 발주 상태
-# =========================================================
+# SKU별 발주 상태
 with tab4:
     st.subheader(f"세부 SKU별 발주·국제 물류 상태 — [{active_sku['id']} {active_sku['name']}]")
     rec_rows = []
@@ -837,4 +633,3 @@ with tab4:
             "의뢰→도착 리드타임": f"{o['eta'] - o['request']}일"
         })
     st.dataframe(pd.DataFrame(rec_rows), use_container_width=True, hide_index=True)
-
